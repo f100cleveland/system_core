@@ -50,7 +50,7 @@
 #define ALOGW printf
 #endif
 
-#ifdef HAVE_ANDROID_OS
+#if defined(__ANDROID__)
 /* SIOCKILLADDR is an Android extension. */
 #define SIOCKILLADDR 0x8939
 #endif
@@ -320,15 +320,21 @@ int ifc_act_on_address(int action, const char *name, const char *address,
     memcpy(RTA_DATA(rta), addr, addrlen);
 
     s = socket(PF_NETLINK, SOCK_RAW | SOCK_CLOEXEC, NETLINK_ROUTE);
-    if (send(s, &req, req.n.nlmsg_len, 0) < 0) {
-        close(s);
+    if (s < 0) {
         return -errno;
     }
 
+    if (send(s, &req, req.n.nlmsg_len, 0) < 0) {
+        saved_errno = errno;
+        close(s);
+        return -saved_errno;
+    }
+
     len = recv(s, buf, sizeof(buf), 0);
+    saved_errno = errno;
     close(s);
     if (len < 0) {
-        return -errno;
+        return -saved_errno;
     }
 
     // Parse the acknowledgement to find the return code.
@@ -599,7 +605,7 @@ int ifc_disable(const char *ifname)
 
 int ifc_reset_connections(const char *ifname, const int reset_mask)
 {
-#ifdef HAVE_ANDROID_OS
+#if defined(__ANDROID__)
     int result, success;
     in_addr_t myaddr = 0;
     struct ifreq ifr;

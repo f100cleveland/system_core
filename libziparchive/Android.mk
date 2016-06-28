@@ -18,9 +18,12 @@ LOCAL_PATH := $(call my-dir)
 source_files := zip_archive.cc zip_writer.cc
 test_files := zip_archive_test.cc zip_writer_test.cc entry_name_utils_test.cc
 
+# ZLIB_CONST turns on const for input buffers, which is pretty standard.
+common_c_flags := -Werror -Wall -DZLIB_CONST
+
 # Incorrectly warns when C++11 empty brace {} initializer is used.
 # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=61489
-common_cpp_flags := -Wno-missing-field-initializers
+common_cpp_flags := -Wold-style-cast -Wno-missing-field-initializers
 
 include $(CLEAR_VARS)
 LOCAL_CPP_EXTENSION := .cc

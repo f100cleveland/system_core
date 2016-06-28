@@ -342,8 +342,10 @@ static int create_subproc_raw(const char *cmd, const char *arg0, const char *arg
 
 #if ADB_HOST
 #define SHELL_COMMAND "/bin/sh"
+#define ALTERNATE_SHELL_COMMAND ""
 #else
 #define SHELL_COMMAND "/system/bin/sh"
+#define ALTERNATE_SHELL_COMMAND "/sbin/sh"
 #endif
 
 #if !ADB_HOST
@@ -384,6 +386,9 @@ static int create_subproc_thread(const char *name, const subproc_mode mode)
     int ret_fd;
     pid_t pid = -1;
 
+    const char* shell_command;
+    struct stat st;
+
     const char *arg0, *arg1;
     if (name == 0 || *name == 0) {
         arg0 = "-"; arg1 = 0;
@@ -391,12 +396,24 @@ static int create_subproc_thread(const char *name, const subproc_mode mode)
         arg0 = "-c"; arg1 = name;
     }
 
+    char value[PROPERTY_VALUE_MAX];
+    property_get("persist.sys.adb.shell", value, "");
+    if (value[0] != '\0' && stat(value, &st) == 0) {
+        shell_command = value;
+    }
+    else if (stat(ALTERNATE_SHELL_COMMAND, &st) == 0) {
+        shell_command = ALTERNATE_SHELL_COMMAND;
+    }
+    else {
+        shell_command = SHELL_COMMAND;
+    }
+
     switch (mode) {
     case SUBPROC_PTY:
-        ret_fd = create_subproc_pty(SHELL_COMMAND, arg0, arg1, &pid);
+        ret_fd = create_subproc_pty(shell_command, arg0, arg1, &pid);
         break;
     case SUBPROC_RAW:
-        ret_fd = create_subproc_raw(SHELL_COMMAND, arg0, arg1, &pid);
+        ret_fd = create_subproc_raw(shell_command, arg0, arg1, &pid);
         break;
     default:
         fprintf(stderr, "invalid subproc_mode %d\n", mode);
@@ -419,6 +436,13 @@ static int create_subproc_thread(const char *name, const subproc_mode mode)
 
     D("service thread started, fd=%d pid=%d\n", ret_fd, pid);
     return ret_fd;
+}
+#endif
+
+#if !ADB_HOST
+static const char* bu_path()
+{
+    return (recovery_mode ? "/sbin/bu" : "/system/bin/bu");
 }
 #endif
 
@@ -478,10 +502,14 @@ int service_to_fd(const char *name)
     } else if(!strncmp(name, "unroot:", 7)) {
         ret = create_service_thread(restart_unroot_service, NULL);
     } else if(!strncmp(name, "backup:", 7)) {
-        ret = create_subproc_thread(android::base::StringPrintf("/system/bin/bu backup %s",
+        ret = create_subproc_thread(android::base::StringPrintf("%s backup %s", bu_path(),
                                                                 (name + 7)).c_str(), SUBPROC_RAW);
     } else if(!strncmp(name, "restore:", 8)) {
-        ret = create_subproc_thread("/system/bin/bu restore", SUBPROC_RAW);
+        char* cmd;
+        if (asprintf(&cmd, "%s restore", bu_path()) != -1) {
+            ret = create_subproc_thread(cmd, SUBPROC_RAW);
+            free(cmd);
+        }
     } else if(!strncmp(name, "tcpip:", 6)) {
         int port;
         if (sscanf(name + 6, "%d", &port) != 1) {
@@ -672,6 +700,15 @@ asocket*  host_service_to_socket(const char*  name, const char *serial)
         } else if (!strncmp(name, "any", strlen("any"))) {
             sinfo->transport = kTransportAny;
             sinfo->state = CS_DEVICE;
+        } else if (!strncmp(name, "sideload", strlen("sideload"))) {
+            sinfo->transport = kTransportAny;
+            sinfo->state = CS_SIDELOAD;
+        } else if (!strncmp(name, "recovery", strlen("recovery"))) {
+            sinfo->transport = kTransportAny;
+            sinfo->state = CS_RECOVERY;
+        } else if (!strncmp(name, "online", strlen("online"))) {
+            sinfo->transport = kTransportAny;
+            sinfo->state = CS_ONLINE;
         } else {
             free(sinfo);
             return NULL;

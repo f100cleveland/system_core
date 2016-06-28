@@ -50,6 +50,10 @@ static ssize_t adf_find_nodes(const char *pattern, adf_id_t **ids)
 
         if (matched < 0) {
             ret = -errno;
+#if __clang_analyzer__
+            if (ret >= 0)
+                __builtin_unreachable();
+#endif
             goto done;
         } else if (matched != 1) {
             continue;
@@ -65,8 +69,13 @@ static ssize_t adf_find_nodes(const char *pattern, adf_id_t **ids)
         ids_ret[n] = id;
         n++;
     }
-    if (errno)
+    if (errno) {
         ret = -errno;
+#if __clang_analyzer__
+        if (ret >= 0)
+            __builtin_unreachable();
+#endif
+    }
     else
         ret = n;
 
@@ -775,8 +784,16 @@ int adf_find_simple_post_configuration(struct adf_device *dev,
 
     if (n_intfs < 0)
         return n_intfs;
-    else if (!n_intfs)
+    else if (!n_intfs) {
+#if __clang_analyzer__
+        /* When n_intfs is 0, intfs must be NULL,
+         * but clang static analyzer does not know that.
+         * Adding a call to free and supress the warning.
+         */
+        free(intfs);
+#endif
         return -ENODEV;
+    }
 
     adf_id_t *primary_intfs;
     ssize_t n_primary_intfs = adf_interfaces_filter_by_flag(dev,

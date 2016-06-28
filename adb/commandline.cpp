@@ -463,7 +463,7 @@ static int adb_download_buffer(const char *service, const char *fn, const void* 
     const uint8_t* ptr = reinterpret_cast<const uint8_t*>(data);
 
     if (show_progress) {
-        char *x = strrchr(service, ':');
+        char *x = (char*) strrchr(service, ':');
         if(x) service = x + 1;
     }
 
@@ -723,8 +723,9 @@ static int send_shell_command(transport_type transport_type, const char* serial,
             break;
         }
         fprintf(stderr,"- waiting for device -\n");
-        adb_sleep_ms(1000);
-        wait_for_device("wait-for-device", transport_type, serial);
+        if (!wait_for_device("wait-for-device", transport_type, serial)) {
+            return 1;
+        }
     }
 
     read_and_dump(fd);
@@ -752,27 +753,6 @@ static int logcat(transport_type transport, const char* serial, int argc, const 
     }
 
     return send_shell_command(transport, serial, cmd);
-}
-
-static int mkdirs(const char *path)
-{
-    std::string holder(path);
-
-    int ret;
-    char *x = &holder[1];
-
-    for(;;) {
-        x = adb_dirstart(x);
-        if(x == 0) return 0;
-        *x = 0;
-        ret = adb_mkdir(path, 0775);
-        *x = OS_PATH_SEPARATOR;
-        if((ret < 0) && (errno != EEXIST)) {
-            return ret;
-        }
-        x++;
-    }
-    return 0;
 }
 
 static int backup(int argc, const char** argv) {
@@ -1571,7 +1551,7 @@ static int install_app(transport_type transport, const char* serial, int argc,
     int last_apk = -1;
     for (i = argc - 1; i >= 0; i--) {
         const char* file = argv[i];
-        char* dot = strrchr(file, '.');
+        char* dot = (char*) strrchr(file, '.');
         if (dot && !strcasecmp(dot, ".apk")) {
             if (stat(file, &sb) == -1 || !S_ISREG(sb.st_mode)) {
                 fprintf(stderr, "Invalid APK file: %s\n", file);
@@ -1617,7 +1597,7 @@ static int install_multiple_app(transport_type transport, const char* serial, in
     int first_apk = -1;
     for (i = argc - 1; i >= 0; i--) {
         const char* file = argv[i];
-        char* dot = strrchr(file, '.');
+        char* dot = (char*) strrchr(file, '.');
         if (dot && !strcasecmp(dot, ".apk")) {
             if (stat(file, &sb) == -1 || !S_ISREG(sb.st_mode)) {
                 fprintf(stderr, "Invalid APK file: %s\n", file);

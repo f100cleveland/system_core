@@ -291,7 +291,7 @@ void service_start(struct service *svc, const char *dynamic_args)
         scon = NULL;
 
         if (svc->writepid_files_) {
-            std::string pid_str = android::base::StringPrintf("%d", pid);
+            std::string pid_str = android::base::StringPrintf("%d", getpid());
             for (auto& file : *svc->writepid_files_) {
                 if (!android::base::WriteStringToFile(pid_str, file)) {
                     ERROR("couldn't write %s to %s: %s\n",
@@ -632,7 +632,7 @@ static int wait_for_coldboot_done_action(int nargs, char **args) {
     // Any longer than 1s is an unreasonable length of time to delay booting.
     // If you're hitting this timeout, check that you didn't make your
     // sepolicy regular expressions too expensive (http://b/19899875).
-    if (wait_for_file(COLDBOOT_DONE, 1)) {
+    if (wait_for_file(COLDBOOT_DONE, COMMAND_RETRY_TIMEOUT)) {
         ERROR("Timed out waiting for %s\n", COLDBOOT_DONE);
     }
 
@@ -942,7 +942,16 @@ int selinux_reload_policy(void)
 }
 
 static int audit_callback(void *data, security_class_t /*cls*/, char *buf, size_t len) {
-    snprintf(buf, len, "property=%s", !data ? "NULL" : (char *)data);
+
+    property_audit_data *d = reinterpret_cast<property_audit_data*>(data);
+
+    if (!d || !d->name || !d->cr) {
+        ERROR("audit_callback invoked with null data arguments!");
+        return 0;
+    }
+
+    snprintf(buf, len, "property=%s pid=%d uid=%d gid=%d", d->name,
+            d->cr->pid, d->cr->uid, d->cr->gid);
     return 0;
 }
 

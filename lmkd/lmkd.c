@@ -27,6 +27,7 @@
 #include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -230,7 +231,7 @@ static int pid_remove(int pid) {
 }
 
 static void writefilestring(char *path, char *s) {
-    int fd = open(path, O_WRONLY);
+    int fd = open(path, O_WRONLY | O_CLOEXEC);
     int len = strlen(s);
     int ret;
 
@@ -249,8 +250,9 @@ static void writefilestring(char *path, char *s) {
     close(fd);
 }
 
-static void cmd_procprio(int pid, int uid, int oomadj) {
+static void cmd_procprio(int pid, uid_t uid, int oomadj) {
     struct proc *procp;
+    struct stat stats;
     char path[80];
     char val[20];
 
@@ -259,7 +261,23 @@ static void cmd_procprio(int pid, int uid, int oomadj) {
         return;
     }
 
-    snprintf(path, sizeof(path), "/proc/%d/oom_score_adj", pid);
+    snprintf(path, sizeof(path), "/proc/%d", pid);
+    if (stat(path, &stats) == 0) {
+        if (stats.st_uid != uid) {
+            ALOGW("Incoming pid %d with uid %u does not match real uid %u",
+                  pid, uid, stats.st_uid);
+            return;
+        }
+    } else {
+        if (errno == ENOENT) {
+            ALOGW("%s does not exist", path);
+            return;
+        } else {
+            ALOGW("Unable to get stat of pid %d; errno=%d", pid, errno);
+        }
+    }
+
+    strlcat(path, "/oom_score_adj", sizeof(path));
     snprintf(val, sizeof(val), "%d", lowmem_oom_adj_to_oom_score_adj(oomadj));
     writefilestring(path, val);
 
@@ -268,16 +286,16 @@ static void cmd_procprio(int pid, int uid, int oomadj) {
 
     procp = pid_lookup(pid);
     if (!procp) {
-            procp = malloc(sizeof(struct proc));
-            if (!procp) {
-                // Oh, the irony.  May need to rebuild our state.
-                return;
-            }
+        procp = malloc(sizeof(struct proc));
+        if (!procp) {
+            // Oh, the irony.  May need to rebuild our state.
+            return;
+        }
 
-            procp->pid = pid;
-            procp->uid = uid;
-            procp->oomadj = oomadj;
-            proc_insert(procp);
+        procp->pid = pid;
+        procp->uid = uid;
+        procp->oomadj = oomadj;
+        proc_insert(procp);
     } else {
         proc_unslot(procp);
         procp->oomadj = oomadj;
@@ -486,7 +504,7 @@ static int zoneinfo_parse(struct sysmeminfo *mip) {
 
     memset(mip, 0, sizeof(struct sysmeminfo));
 
-    fd = open(ZONEINFO_PATH, O_RDONLY);
+    fd = open(ZONEINFO_PATH, O_RDONLY | O_CLOEXEC);
     if (fd == -1) {
         ALOGE("%s open: errno=%d", ZONEINFO_PATH, errno);
         return -1;
@@ -517,7 +535,7 @@ static int proc_get_size(int pid) {
     ssize_t ret;
 
     snprintf(path, PATH_MAX, "/proc/%d/statm", pid);
-    fd = open(path, O_RDONLY);
+    fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd == -1)
         return -1;
 
@@ -540,7 +558,7 @@ static char *proc_get_name(int pid) {
     ssize_t ret;
 
     snprintf(path, PATH_MAX, "/proc/%d/cmdline", pid);
-    fd = open(path, O_RDONLY);
+    fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd == -1)
         return NULL;
     ret = read_all(fd, line, sizeof(line) - 1);
@@ -582,7 +600,7 @@ static int kill_one_process(struct proc *procp, int other_free, int other_file,
         return -1;
     }
 
-    ALOGI("Killing '%s' (%d), uid %d, adj %d\n"
+    ALOGI("Killing '%s' (%d), uid %u, adj %d\n"
           "   to free %ldkB because cache %s%ldkB is below limit %ldkB for oom_adj %d\n"
           "   Free memory is %s%ldkB %s reserved",
           taskname, pid, uid, procp->oomadj, tasksize * page_k,
@@ -685,19 +703,19 @@ static int init_mp(char *levelstr, void *event_handler)
     struct epoll_event epev;
     int ret;
 
-    mpfd = open(MEMCG_SYSFS_PATH "memory.pressure_level", O_RDONLY);
+    mpfd = open(MEMCG_SYSFS_PATH "memory.pressure_level", O_RDONLY | O_CLOEXEC);
     if (mpfd < 0) {
         ALOGI("No kernel memory.pressure_level support (errno=%d)", errno);
         goto err_open_mpfd;
     }
 
-    evctlfd = open(MEMCG_SYSFS_PATH "cgroup.event_control", O_WRONLY);
+    evctlfd = open(MEMCG_SYSFS_PATH "cgroup.event_control", O_WRONLY | O_CLOEXEC);
     if (evctlfd < 0) {
         ALOGI("No kernel memory cgroup event control (errno=%d)", errno);
         goto err_open_evctlfd;
     }
 
-    evfd = eventfd(0, EFD_NONBLOCK);
+    evfd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     if (evfd < 0) {
         ALOGE("eventfd failed for level %s; errno=%d", levelstr, errno);
         goto err_eventfd;

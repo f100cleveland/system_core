@@ -275,7 +275,7 @@ void usage(void)
             "usage: fastboot [ <option> ] <command>\n"
             "\n"
             "commands:\n"
-            "  update <filename>                        reflash device from update.zip\n"
+            "  update <filename> [ -a <boot.img> ]      reflash device from update.zip\n"
             "  flashall                                 flash boot, system, vendor and if found,\n"
             "                                           recovery\n"
             "  flash <partition> [ <filename> ]         write a file to a flash partition\n"
@@ -325,6 +325,9 @@ void usage(void)
             "                                           default: 2048\n"
             "  -S <size>[K|M|G]                         automatically sparse files greater\n"
             "                                           than size.  0 to disable\n"
+            "  -R                                       reboot device (e.g. after flash)\n"
+            "  -a <boot.img>                            use alternate <boot.img> instead of\n"
+            "                                           boot.img in update.zip file\n"
         );
 }
 
@@ -386,7 +389,7 @@ void *load_bootable_image(const char *kernel, const char *ramdisk,
 
 static void* unzip_file(ZipArchiveHandle zip, const char* entry_name, unsigned* sz)
 {
-    ZipEntryName zip_entry_name(entry_name);
+    ZipString zip_entry_name(entry_name);
     ZipEntry zip_entry;
     if (FindEntry(zip, zip_entry_name, &zip_entry) != 0) {
         fprintf(stderr, "archive does not contain '%s'\n", entry_name);
@@ -448,7 +451,7 @@ static int unzip_to_file(ZipArchiveHandle zip, char* entry_name) {
         return -1;
     }
 
-    ZipEntryName zip_entry_name(entry_name);
+    ZipString zip_entry_name(entry_name);
     ZipEntry zip_entry;
     if (FindEntry(zip, zip_entry_name, &zip_entry) != 0) {
         fprintf(stderr, "archive does not contain '%s'\n", entry_name);
@@ -736,7 +739,7 @@ void do_update_signature(ZipArchiveHandle zip, char *fn)
     fb_queue_command("signature", "installing signature");
 }
 
-void do_update(usb_handle *usb, const char *filename, int erase_first)
+void do_update(usb_handle *usb, const char *filename, int erase_first, const char *alt_boot_fname)
 {
     queue_info_dump();
 
@@ -759,18 +762,27 @@ void do_update(usb_handle *usb, const char *filename, int erase_first)
     setup_requirements(reinterpret_cast<char*>(data), sz);
 
     for (size_t i = 0; i < ARRAY_SIZE(images); ++i) {
-        int fd = unzip_to_file(zip, images[i].img_name);
-        if (fd == -1) {
-            if (images[i].is_optional) {
-                continue;
-            }
-            CloseArchive(zip);
-            exit(1); // unzip_to_file already explained why.
-        }
         fastboot_buffer buf;
-        int rc = load_buf_fd(usb, fd, &buf);
-        if (rc) die("cannot load %s from flash", images[i].img_name);
-        do_update_signature(zip, images[i].sig_name);
+        // support alt images only for boot partition
+        bool from_zip = alt_boot_fname == NULL ||
+                strncmp(images[i].part_name, "boot", sizeof(images[i].part_name));
+        if (from_zip) {
+            int fd = unzip_to_file(zip, images[i].img_name);
+            if (fd == -1) {
+                if (images[i].is_optional) {
+                    continue;
+                }
+                CloseArchive(zip);
+                exit(1); // unzip_to_file already explained why.
+            }
+            int rc = load_buf_fd(usb, fd, &buf);
+            if (rc) die("cannot load %s from flash", images[i].img_name);
+            do_update_signature(zip, images[i].sig_name);
+        } else {
+            int rc = load_buf(usb, alt_boot_fname, &buf);
+            if (rc) die("cannot load %s", alt_boot_fname);
+        }
+
         if (erase_first && needs_erase(usb, images[i].part_name)) {
             fb_queue_erase(images[i].part_name);
         }
@@ -1013,8 +1025,10 @@ int main(int argc, char **argv)
     int status;
     int c;
     int longindex;
+    const char *alt_boot_fname = NULL;
 
     const struct option longopts[] = {
+        {"alt-boot", required_argument, 0, 'a'},
         {"base", required_argument, 0, 'b'},
         {"kernel_offset", required_argument, 0, 'k'},
         {"page_size", required_argument, 0, 'n'},
@@ -1023,18 +1037,22 @@ int main(int argc, char **argv)
         {"help", no_argument, 0, 'h'},
         {"unbuffered", no_argument, 0, 0},
         {"version", no_argument, 0, 0},
+        {"reboot", no_argument, 0, 'R'},
         {0, 0, 0, 0}
     };
 
     serial = getenv("ANDROID_SERIAL");
 
     while (1) {
-        c = getopt_long(argc, argv, "wub:k:n:r:t:s:S:lp:c:i:m:h", longopts, &longindex);
+        c = getopt_long(argc, argv, "wub:k:n:r:t:s:S:lp:c:i:m:hRa:", longopts, &longindex);
         if (c < 0) {
             break;
         }
         /* Alphabetical cases */
         switch (c) {
+        case 'a':
+            alt_boot_fname = optarg;
+            break;
         case 'b':
             base_addr = strtoul(optarg, 0, 16);
             break;
@@ -1069,6 +1087,9 @@ int main(int argc, char **argv)
             break;
         case 'r':
             ramdisk_offset = strtoul(optarg, 0, 16);
+            break;
+        case 'R':
+            wants_reboot = 1;
             break;
         case 't':
             tags_offset = strtoul(optarg, 0, 16);
@@ -1247,10 +1268,10 @@ int main(int argc, char **argv)
             wants_reboot = 1;
         } else if(!strcmp(*argv, "update")) {
             if (argc > 1) {
-                do_update(usb, argv[1], erase_first);
+                do_update(usb, argv[1], erase_first, alt_boot_fname);
                 skip(2);
             } else {
-                do_update(usb, "update.zip", erase_first);
+                do_update(usb, "update.zip", erase_first, alt_boot_fname);
                 skip(1);
             }
             wants_reboot = 1;
